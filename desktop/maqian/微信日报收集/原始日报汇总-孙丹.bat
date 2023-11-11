@@ -1,0 +1,2 @@
+RawReportCollector.exe aaa
+pause

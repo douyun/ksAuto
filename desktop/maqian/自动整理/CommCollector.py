@@ -16,7 +16,8 @@ PATTERN = {'testDate': u'(?:任务进度|任务日期|任务时间|任务时期|
             'testPerson': u'(?:服务人员|任务人员|作业人员|检验人员|检验人)',
             'taskDate': u'(?:任务时间|检验时间)',
             'testHour': u'(?:总计工时|共计:|任务总工时|工时合计|合计工时|任务总时|总工时|总共时|工时|总工时计|任务共计|共计工时|检验有效工时|共计时间)',
-            'remark': u'备注'
+            'remark': u'备注',
+            'dayNight': u'(白班|夜班)'
             }
 
 
@@ -152,6 +153,16 @@ class CommCollector(object):
         except:
             return row.decode('utf-8')
 
+    def _format_test_date(self, testDate):
+        testDate = testDate.replace(' ', '').replace(u' ', u'')
+        m = re.search(u'(\d+年\d+月\d+(?:日|号))',  testDate)
+        if m:
+            return m.group(1)
+        m = re.search(u'(\d+\.\d+\.\d+)', testDate)
+        if m:
+            return m.group(1)
+        return testDate
+
     def collect_all_rows(self):
         testItems = []
         f = open('input.csv', 'r')
@@ -165,7 +176,7 @@ class CommCollector(object):
             for k in self._rowDict:
                 self._rowDict[k] = ''
             for line in rowStr.split('\n'):
-                eachItemNames = ['vendorName', 'testDate', 'partName', 'partNo', 'batchNo', 'vendorNo', 'testSum', 'okSum', 'badSum', 'badType', 'serviceDetail', 'serviceAddr']
+                eachItemNames = ['vendorName', 'testDate', 'partName', 'partNo', 'batchNo', 'vendorNo', 'testSum', 'okSum', 'badSum', 'badType', 'serviceDetail', 'serviceAddr', 'dayNight']
                 for item in eachItemNames:
                     self._rowDict[item] = self.get_matched_info(item, line)
                 
@@ -180,7 +191,7 @@ class CommCollector(object):
                     continue
                 if flag and match_str(PATTERN.get('taskDate'), line) == '' and match_str(PATTERN.get('testHour'), line) == '':
                     self._rowDict['testPerson'] += line
-                
+
                 self._rowDict['taskDate'] = self.get_matched_info('taskDate', line)
                 self._rowDict['testHour'] = self.get_matched_info('testHour', line)
                 if self._rowDict['taskDate'] or self._rowDict['testHour']:
@@ -193,16 +204,33 @@ class CommCollector(object):
                 if len(testItem) == len(eachItemNames):
                     if taskHourflag:
                         testItem.extend([self._rowDict['testPerson'], self._rowDict['taskDate'], self._get_workhour(self._rowDict['testHour']), self._rowDict['remark'],
-                                         self.get_order_no(self._rowDict, 1), self.get_order_no(self._rowDict, 2)])
+                                         self.get_order_no(self._rowDict, 1)])
+                        testCountsOfAnOrder = 0
+                        overallItem = testItem
                         taskHourflag = False
-                        testItem[-5] = self._process_task_date(testItem[-5])
+                        try:
+                            testHour = float(self._get_workhour(self._rowDict['testHour']))
+                        except:
+                            testHour = 0
+                        testItem[-4] = self._process_task_date(testItem[-4])
                     testItem[6] = self._process_num(testItem[6])
                     testItem[7] = self._process_num(testItem[7])
                     testItem[8] = self._process_num(testItem[8])
+                    testItem[1] = self._format_test_date(testItem[1])
+
+                    testCountsOfAnOrder += int(testItem[6])
                     testItem.insert(1, str(i))
                     testItem.insert(0, self.get_order_no(self._rowDict, 0).decode('gbk'))
+                    testItem.insert(2, self.get_order_no(self._rowDict, 2).decode('gbk'))
+            if not taskHourflag:
+                overallItem.append(self._count_test_efficiency(testCountsOfAnOrder, testHour))
             i += 1
         return testItems
+
+    def _count_test_efficiency(self, testCountsOfAnOrder, testHour):
+        if testHour == 0:
+            return ''
+        return str(round(testCountsOfAnOrder / testHour, 2)).decode('gbk')
 
     def get_order_no(self, rowDict, index=0):
         return OrderNoSearcher().find_orderno_and_chargerate(rowDict['vendorName'].encode('gbk'),
@@ -213,8 +241,8 @@ class CommCollector(object):
     def save_collect_result(self, testItems):
         f = open('output.csv', 'wb')
         writer = csv.writer(f)
-        testItems = [[u'订单号', u'供应商名称', u'序号', u'检验日期', u'零件名称', u'零件号', u'批次号', u'供应商批次', u'检验总数', u'合格数量', u'不良数量', u'不良类型', u'服务明细', u'服务地点',
-                      u'任务人员', u'任务时间', u'任务工时', u'备注', u'费率', u'录入方式']] + testItems
+        testItems = [[u'订单号', u'供应商名称', u'录入方式', u'序号', u'检验日期', u'零件名称', u'零件号', u'批次号', u'供应商批次', u'检验总数', u'合格数量', u'不良数量', u'不良类型', u'服务明细', u'服务地点', u'班次',
+                      u'任务人员', u'任务时间', u'任务工时', u'备注', u'费率', u'效率']] + testItems
         for testItem in testItems:
             testItem = map(lambda i: i.encode('gbk'), testItem)
             writer.writerow(testItem)

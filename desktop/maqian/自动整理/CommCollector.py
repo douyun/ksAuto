@@ -131,9 +131,9 @@ class CommCollector(object):
         dates = line.split('##')[1:]
         taskDates = []
         for date in dates:
-            m = re.search(ur'(\d+(?:\:|：|\.)\d+\s*(?:\-|\-|\~)\s*\d+(?:\:|：|\.)\d+)', date)
+            m = re.search(ur'(\d+(?:\:|：|\.)\d+\s*(?:\-|\-|\~|－|—|_)\s*\d+(?:\:|：|\.)\d+)', date)
             if m:
-                taskDates.append(m.group(1).strip().replace(u'：', u':').replace(u'~', u'-').replace(u'.', u':').replace(u' ', ''))
+                taskDates.append(m.group(1).strip().replace(u'：', u':').replace(u'~', u'-').replace(u'.', u':').replace(u' ', '').replace(u'－', '').replace(u'—', '').replace(u'_', ''))
         if len(taskDates) > 1:
             taskDates = map(lambda taskDate: taskDate + '()', taskDates)
         result = ' '.join(taskDates)

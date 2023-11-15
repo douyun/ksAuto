@@ -5,22 +5,30 @@ import re
 from datetime import datetime
 
 from openpyxl import load_workbook
-from openpyxl.styles import Border, Side
+from openpyxl.styles import Border, Side, Alignment
 
 SrcDestKeyDict = {u'检验日期': u'日期',
-                  u'服务地点': u'地点',
+                  u'服务地点': u'服务地点',
                   u'零件名称': u'零件名称',
-                  u'零件号': u'物料号',
-                  u'服务明细': u'挑选内容',
-                   u'批次号': u'批次',
+                  u'零件号': u'零件号',
+                  u'服务明细': u'服务明细',
+                   u'批次号': u'批次号',
                    u'供应商批次': u'供应商批次',
                    u'检验总数': u'返工数量',
-                   u'任务人员': u'返工人数',
+                   u'任务人员': u'任务人员',
                    u'任务时间': u'任务时间',
                    u'效率': u'效率',
-                  u'任务工时': u'工时',
+                  u'任务工时': u'任务工时',
                   u'班次': u'班次',
-                  u'不良类型': u'异常描述'}
+                  u'不良数量': u'不良数',
+                  u'不良类型': u'不良明细'}
+
+
+FormulaDict = {u'合格数量': u'返工数量-不良数'}
+
+OverallFormulaDict = {u'返工数量': '=SUM({0}{1}:{0}{2})',
+                      u'不良数': '=SUM({0}{1}:{0}{2})',
+                      u'工时': '=SUM({0}{1}:{0}{2})'}
 
 
 class OfflineWriteReport(object):
@@ -52,11 +60,40 @@ class OfflineWriteReport(object):
         f.close()
         return datas
 
+    def __get_heads(self, sheet, headIndex=0):
+        rows = list(sheet.rows)
+        heads = rows[headIndex]
+        return map(lambda cell: cell.value, heads)
+
+    def __init_formula_dict(self, sheet, formulaDict, headIndex=6):
+        heads = self.__get_heads(sheet, headIndex)
+
+        formulaItems = []
+        for key, value in formulaDict.items():
+            value = value.replace('+', '#').replace('-', '#').replace('*', '#').replace('/', '#')
+            for colName in value.split('#'):
+                formulaItems.append(colName)
+            formulaItems.append(key)
+        formulaItems = list(set(formulaItems))
+
+        srcKeyDestColIndexMap = {}
+        for formulaItem in formulaItems:
+            for index, destHead in enumerate(heads):
+                if destHead and destHead.find(formulaItem) >= 0:
+                    srcKeyDestColIndexMap.update({formulaItem: index})
+                    break
+
+        transformedFormulaDict = {}
+        for fKey, fValue in formulaDict.items():
+            for key, value in srcKeyDestColIndexMap.items():
+                fValue = fValue.replace(key, chr(value + 65))
+            transformedFormulaDict.update({srcKeyDestColIndexMap.get(fKey): str(fValue)})
+        return transformedFormulaDict
+
     def __init_col_index(self, sheet, srcDestKeyDict, headIndex=0):
         rows = list(sheet.rows)
         heads = rows[headIndex]
         heads = map(lambda cell: cell.value, heads)
-        print heads
         return self._init_srckey_dest_col_index_dict(heads, srcDestKeyDict)
 
     def __delete_null_rows(self, sheet, wb, outFilePath, dataBeginIndex=2):
@@ -88,26 +125,55 @@ class OfflineWriteReport(object):
 
             wb = load_workbook(orderFilePath)
             sheet = wb.get_sheet_by_name(u'分选明细')
+
             self.__delete_null_rows(sheet, wb, orderFilePath)
             srcKeyDestColIndexMap = self.__init_col_index(sheet, SrcDestKeyDict)
+
+            formulaDict = self.__init_formula_dict(sheet, FormulaDict, 0)
+
+            dates = []
             for inputData in inputDatas:
                 maxRow = sheet.max_row
                 sheet.insert_rows(maxRow + 1)
                 for srcKey, destColIndex in srcKeyDestColIndexMap.items():
                     dataType = self._get_data_type(srcKey)
                     sheet.cell(row=maxRow + 1, column=destColIndex + 1).value = self.__encode_data(inputData.get(srcKey.encode('gbk')), dataType)
+                    sheet.cell(row=maxRow + 1, column=1+srcKeyDestColIndexMap.get(u'不良数量')).data_type = 'n'
                     self._set_row_boder(sheet, maxRow + 1)
+                for col, formulaStr in formulaDict.items():
+                    sheet.cell(row=maxRow + 1, column=col + 1).value = self._generate_formula(maxRow + 1, formulaStr)
+                    self._set_row_boder(sheet, maxRow + 1)
+                self._write_overall_cell(sheet, OverallFormulaDict, 2, 3, maxRow + 1, 0)
+                dates.append(self.__encode_data(inputData.get(u'检验日期'.encode('gbk')), 'dateStr'))
             wb.save(orderFilePath)
+            self._rename_date_in_filename(orderFilePath, max(dates))
+
+    def _write_overall_cell(self, sheet, overallFormulaDict, cellRow, startRow, endRow, headIndex=6):
+        heads = self.__get_heads(sheet, headIndex)
+        for headName, formula in overallFormulaDict.items():
+            for index, destHead in enumerate(heads):
+                if destHead and destHead.find(headName) >= 0:
+                    col = index + 1
+                    sheet.cell(cellRow, col).value = formula.format(chr(index + 65), startRow, endRow)
+                    break
 
     def _set_row_boder(self, sheet, rowIndex):
         for col in range(sheet.max_column):
-            sheet.cell(row=rowIndex, column=col+1).border = Border(left=Side(style='thin', color='000000'),
-                                                                   right=Side(style='thin', color='000000'),
-                                                                   top=Side(style='thin', color='000000'),
-                                                                   bottom=Side(style='thin', color='000000'))
+            cell = sheet.cell(row=rowIndex, column=col + 1)
+            cell.border = Border(left=Side(style='thin', color='000000'),
+                                 right=Side(style='thin', color='000000'),
+                                 top=Side(style='thin', color='000000'),
+                                 bottom=Side(style='thin', color='000000'))
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    def _generate_formula(self, row, formulaStr):
+        for i in range(65, 65 + 26):
+            formulaStr = formulaStr.replace(chr(i), '{0}{1}'.format(chr(i), row))
+        return '=' + formulaStr
+
     def _get_data_type(self, srcKey):
         dataType = None
-        if srcKey in [u'检验总数']:
+        if srcKey in [u'检验总数', u'不良数量']:
             dataType = int
         if srcKey in [u'任务工时', u'效率']:
             dataType = float
@@ -127,6 +193,10 @@ class OfflineWriteReport(object):
             m = re.search(u'(\d+).(\d+).(\d+)', data.decode('gbk'))
             if m:
                 return datetime.strptime('{0}-{1}-{2}'.format(m.group(1), m.group(2), m.group(3)), '%Y-%m-%d').date()
+        if dataType == 'dateStr':
+            m = re.search(u'(\d+).(\d+).(\d+)', data.decode('gbk'))
+            if m:
+                return '{0}-{1}-{2}'.format(m.group(1), m.group(2), m.group(3))
         elif dataType == 'batchNo':
             return self.format_batch_no(data)
         elif dataType is not None:
@@ -137,6 +207,13 @@ class OfflineWriteReport(object):
             return data.encode('utf-8')
         except:
             return data
+
+    def _rename_date_in_filename(self, fileName, maxDate):
+        modifiedFileName = re.sub('\d{4}-\d{2}-\d{2}', maxDate, fileName)
+        if maxDate != modifiedFileName:
+            os.rename(fileName, modifiedFileName)
+        else:
+            print 'modify filename failed, check whether the date in file name is latest'
 
 
 if __name__ == '__main__':

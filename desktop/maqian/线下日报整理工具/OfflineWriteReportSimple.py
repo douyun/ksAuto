@@ -7,28 +7,29 @@ from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import Border, Side, Alignment
 
-SrcDestKeyDict = {u'检验日期': u'日期',
+SrcDestKeyDict = {u'检验日期': u'检验日期',
                   u'服务地点': u'服务地点',
                   u'零件名称': u'零件名称',
                   u'零件号': u'零件号',
                   u'服务明细': u'服务明细',
                    u'批次号': u'批次号',
                    u'供应商批次': u'供应商批次',
-                   u'检验总数': u'返工数量',
+                   u'检验总数': u'检验总数',
                    u'任务人员': u'任务人员',
                    u'任务时间': u'任务时间',
                    u'效率': u'效率',
                   u'任务工时': u'任务工时',
                   u'班次': u'班次',
-                  u'不良数量': u'不良数',
+                  u'不良数量': u'不良数量',
                   u'不良类型': u'不良明细'}
 
+MergeCols = [u'任务工时', u'任务时间', u'任务人员', u'效率']
 
-FormulaDict = {u'合格数量': u'返工数量-不良数'}
+FormulaDict = {u'合格数量': u'检验总数-不良数量'}
 
-OverallFormulaDict = {u'返工数量': '=SUM({0}{1}:{0}{2})',
-                      u'不良数': '=SUM({0}{1}:{0}{2})',
-                      u'工时': '=SUM({0}{1}:{0}{2})'}
+OverallFormulaDict = {u'检验总数': '=SUM({0}{1}:{0}{2})',
+                      u'不良数量': '=SUM({0}{1}:{0}{2})',
+                      u'任务工时': '=SUM({0}{1}:{0}{2})'}
 
 
 class OfflineWriteReport(object):
@@ -145,8 +146,46 @@ class OfflineWriteReport(object):
                     self._set_row_boder(sheet, maxRow + 1)
                 self._write_overall_cell(sheet, OverallFormulaDict, 2, 3, maxRow + 1, 0)
                 dates.append(self.__encode_data(inputData.get(u'检验日期'.encode('gbk')), 'dateStr'))
+            self._merge_cell(sheet)
             wb.save(orderFilePath)
             self._rename_date_in_filename(orderFilePath, max(dates))
+
+    def _get_all_merge_cell(self, sheet):
+        mergeCells = []
+        for range in sheet.merged_cell_ranges:
+            mergeCells.append((range.min_row, range.min_col, range.max_row, range.max_col))
+        return mergeCells
+
+    def _merge_cell(self, sheet):
+        heads = self.__get_heads(sheet, 0)
+        mergeColIndexs = []
+        for mergeCol in MergeCols:
+            for index, destHead in enumerate(heads):
+                if destHead and destHead.find(mergeCol) >= 0:
+                    mergeColIndexs.append(index + 1)
+                    break
+        col = mergeColIndexs[0]
+
+        mergedCell = self._get_all_merge_cell(sheet)
+
+        startRow = -1
+        mergedRows = []
+        for i in range(3, sheet.max_row + 1):
+            if sheet.cell(i, col).value is not None and sheet.cell(i, col).value != '':
+                if startRow > 0 and i - startRow > 1:
+                    mergedRows.append([startRow, i - 1])
+                startRow = i
+        if sheet.max_row > startRow:
+            mergedRows.append([startRow, sheet.max_row])
+
+        for mergedRow in mergedRows:
+            minRow = mergedRow[0]
+            maxRow = mergedRow[1]
+            for col in mergeColIndexs:
+                if (minRow, col, maxRow, col) not in mergedCell:
+                    sheet.merge_cells(None, minRow, col, maxRow, col)
+                    sheet.cell(minRow, col).alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
+
 
     def _write_overall_cell(self, sheet, overallFormulaDict, cellRow, startRow, endRow, headIndex=6):
         heads = self.__get_heads(sheet, headIndex)
@@ -164,7 +203,7 @@ class OfflineWriteReport(object):
                                  right=Side(style='thin', color='000000'),
                                  top=Side(style='thin', color='000000'),
                                  bottom=Side(style='thin', color='000000'))
-            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
     def _generate_formula(self, row, formulaStr):
         for i in range(65, 65 + 26):
